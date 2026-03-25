@@ -1,0 +1,564 @@
+import { useState, useRef } from "react";
+
+const FIRM = "Courage Korving Miller Partners";
+const ADVISOR = "Jeff";
+const COORDINATOR = "Kelly";
+const PHONE = "757-390-3100";
+const WEBSITE = "couragekorvingmiller.com";
+
+const TOPICS = [
+  "What Is a Fiduciary — and Why It Matters",
+  "Social Security: When Should You Take It?",
+  "Roth Conversions — Who They're For and When",
+  "The Estate Tax Exemption Sunset Is Coming",
+  "How to Build a Retirement Paycheck",
+  "The 4% Rule — Is It Still Relevant?",
+  "Long-Term Care — The Risk Nobody Plans For",
+  "Buy-Sell Agreements — Protecting Your Business",
+  "What Happens to Your Wealth When You Sell Your Business",
+  "Beneficiary Designation Mistakes to Avoid",
+];
+
+const AGENTS = [
+  { id: "topic-drafter",   phase: "Phase 1 — Foundation", icon: "📋", label: "Topic Drafter" },
+  { id: "script-writer",   phase: "Phase 1 — Foundation", icon: "🎬", label: "Script Writer" },
+  { id: "social-posts",    phase: "Phase 1 — Foundation", icon: "📱", label: "Social Post Generator" },
+  { id: "partner-prompt",  phase: "Phase 2 — Partners",   icon: "🤝", label: "Partner Prompt Sender" },
+  { id: "quote-card",      phase: "Phase 2 — Partners",   icon: "💬", label: "Quote Card Writer" },
+  { id: "newsletter",      phase: "Phase 2 — Partners",   icon: "📧", label: "Newsletter Builder" },
+];
+
+async function callClaude(system, user) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      system,
+      messages: [{ role: "user", content: user }],
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.content.map((b) => b.text || "").join("");
+}
+
+function Chip({ label, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      background: "#ede7da", border: "1px solid transparent", borderRadius: 20,
+      padding: "4px 12px", fontSize: 12, cursor: "pointer", color: "#0f1f38",
+      transition: "all .15s", whiteSpace: "nowrap", fontFamily: "inherit",
+    }}
+    onMouseEnter={e => { e.target.style.background = "rgba(201,168,76,0.15)"; e.target.style.borderColor = "#c9a84c"; }}
+    onMouseLeave={e => { e.target.style.background = "#ede7da"; e.target.style.borderColor = "transparent"; }}
+    >{label}</button>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#0f1f38" }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+const inputStyle = {
+  width: "100%", background: "#fff", border: "1.5px solid #ede7da",
+  borderRadius: 8, padding: "10px 13px", fontSize: 14, fontFamily: "inherit",
+  color: "#1a1a2e", outline: "none", transition: "border-color .2s",
+  boxSizing: "border-box",
+};
+
+function Input({ id, placeholder, value, onChange }) {
+  return <input style={inputStyle} id={id} placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)}
+    onFocus={e => e.target.style.borderColor = "#c9a84c"}
+    onBlur={e => e.target.style.borderColor = "#ede7da"} />;
+}
+
+function Select({ value, onChange, options }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{ ...inputStyle, appearance: "none", cursor: "pointer", paddingRight: 36,
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")`,
+        backgroundRepeat: "no-repeat", backgroundPosition: "right 13px center" }}
+      onFocus={e => e.target.style.borderColor = "#c9a84c"}
+      onBlur={e => e.target.style.borderColor = "#ede7da"}>
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
+function Textarea({ value, onChange, rows = 4, placeholder }) {
+  return <textarea value={value} onChange={e => onChange(e.target.value)} rows={rows} placeholder={placeholder}
+    style={{ ...inputStyle, resize: "vertical" }}
+    onFocus={e => e.target.style.borderColor = "#c9a84c"}
+    onBlur={e => e.target.style.borderColor = "#ede7da"} />;
+}
+
+function RunBtn({ onClick, loading, label = "Run Agent" }) {
+  return (
+    <button onClick={onClick} disabled={loading} style={{
+      background: loading ? "#6b7280" : "#0f1f38", color: "#fff", border: "none",
+      borderRadius: 8, padding: "12px 26px", fontFamily: "inherit", fontSize: 14,
+      fontWeight: 600, cursor: loading ? "not-allowed" : "pointer",
+      display: "inline-flex", alignItems: "center", gap: 8, letterSpacing: "0.02em",
+    }}>
+      {loading ? "✦ Generating..." : `✦ ${label}`}
+    </button>
+  );
+}
+
+function OutputBox({ text, loading }) {
+  const copyText = () => navigator.clipboard.writeText(text);
+  if (!text && !loading) return null;
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, color: "#0f1f38" }}>Output</span>
+        {text && <button onClick={copyText} style={{ background: "none", border: "1.5px solid #ede7da", borderRadius: 6, padding: "4px 12px", fontSize: 12, fontFamily: "inherit", color: "#6b7280", cursor: "pointer" }}>⧉ Copy</button>}
+      </div>
+      <div style={{ background: "#fff", border: `1.5px solid ${loading ? "#c9a84c" : "#ede7da"}`, borderRadius: 10, padding: "22px 26px", fontSize: 14, lineHeight: 1.75, color: "#1a1a2e", whiteSpace: "pre-wrap", minHeight: 80, maxHeight: 500, overflowY: "auto" }}>
+        {loading ? <Dots /> : text}
+      </div>
+    </div>
+  );
+}
+
+function Dots() {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 0" }}>
+      {[0, 0.2, 0.4].map((d, i) => (
+        <div key={i} style={{ width: 7, height: 7, background: "#c9a84c", borderRadius: "50%",
+          animation: "pulse 1.2s ease-in-out infinite", animationDelay: `${d}s` }} />
+      ))}
+      <style>{`@keyframes pulse { 0%,80%,100%{transform:scale(.6);opacity:.4} 40%{transform:scale(1);opacity:1} }`}</style>
+    </div>
+  );
+}
+
+function SocialOutputBox({ outputs, loading }) {
+  const [tab, setTab] = useState(0);
+  const tabs = ["💼 LinkedIn", "👥 Facebook", "📧 Email Teaser"];
+  if (!outputs.some(Boolean) && !loading) return null;
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 600, color: "#0f1f38" }}>Social Posts</span>
+        {outputs[tab] && <button onClick={() => navigator.clipboard.writeText(outputs[tab])} style={{ background: "none", border: "1.5px solid #ede7da", borderRadius: 6, padding: "4px 12px", fontSize: 12, fontFamily: "inherit", color: "#6b7280", cursor: "pointer" }}>⧉ Copy</button>}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        {tabs.map((t, i) => (
+          <button key={i} onClick={() => setTab(i)} style={{ background: tab === i ? "#0f1f38" : "#ede7da", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontFamily: "inherit", fontWeight: 500, color: tab === i ? "#fff" : "#6b7280", cursor: "pointer" }}>{t}</button>
+        ))}
+      </div>
+      <div style={{ background: "#fff", border: `1.5px solid ${loading ? "#c9a84c" : "#ede7da"}`, borderRadius: 10, padding: "22px 26px", fontSize: 14, lineHeight: 1.75, color: "#1a1a2e", whiteSpace: "pre-wrap", minHeight: 80, maxHeight: 500, overflowY: "auto" }}>
+        {loading ? <Dots /> : outputs[tab]}
+      </div>
+    </div>
+  );
+}
+
+// ── AGENT PANELS ──
+
+function TopicDrafter() {
+  const [topic, setTopic] = useState("");
+  const [audience, setAudience] = useState("All Audiences");
+  const [format, setFormat] = useState("Short Video (60–90 sec)");
+  const [context, setContext] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!topic) { setError("Please enter a topic."); return; }
+    setError(""); setLoading(true); setOutput("");
+    try {
+      const sys = `You are a senior content strategist for ${FIRM}, a wealth management firm. Your writing is clear, client-friendly, and authoritative.`;
+      const usr = `Create a concise 1-page briefing for ${ADVISOR} (Lead Advisor) for an upcoming ${format} on this topic.\n\nTOPIC: ${topic}\nAUDIENCE: ${audience}\n${context ? "SPECIAL CONTEXT: " + context : ""}\n\nSections:\n1. TOPIC OVERVIEW (2–3 sentences)\n2. WHY THIS MATTERS NOW (1–2 sentences)\n3. KEY TALKING POINTS (4–5 bullets, client-ready language)\n4. STAT OR FACT TO ANCHOR THE STORY\n5. COMMON MISCONCEPTION TO ADDRESS\n6. ANGLE SUGGESTIONS (2 options for how ${ADVISOR} might open)\n7. NATURAL SEGUE TO CTA\n\nKeep it punchy — ${ADVISOR} should scan this in 90 seconds and feel prepared.`;
+      setOutput(await callClaude(sys, usr));
+    } catch (e) { setError("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <Field label="Topic">
+        <Input value={topic} onChange={setTopic} placeholder="e.g. Roth Conversions — Who They're For and When" />
+        <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Quick-fill from your calendar</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
+          {TOPICS.slice(0, 7).map(t => <Chip key={t} label={t.split("—")[0].trim()} onClick={() => setTopic(t)} />)}
+        </div>
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Primary Audience">
+          <Select value={audience} onChange={setAudience} options={[
+            { value: "All Audiences", label: "All Audiences" },
+            { value: "High-Net-Worth Individuals", label: "High-Net-Worth Individuals" },
+            { value: "Business Owners", label: "Business Owners" },
+            { value: "Pre-Retirees (ages 55–65)", label: "Pre-Retirees (55–65)" },
+            { value: "Retirees", label: "Retirees" },
+          ]} />
+        </Field>
+        <Field label="Format">
+          <Select value={format} onChange={setFormat} options={[
+            { value: "Short Video (60–90 sec)", label: "Short Video (60–90 sec)" },
+            { value: "Email Newsletter", label: "Email Newsletter" },
+            { value: "Social Post", label: "Social Post" },
+            { value: "Co-Video with Partner", label: "Co-Video with Partner" },
+          ]} />
+        </Field>
+      </div>
+      <Field label="Special angle or context? (optional)">
+        <Textarea value={context} onChange={setContext} rows={2} placeholder="e.g. tie to the 2026 estate tax sunset, or a client asked about this last week..." />
+      </Field>
+      <RunBtn onClick={run} loading={loading} label="Draft Briefing" />
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#b91c1c" }}>{error}</div>}
+      <OutputBox text={output} loading={loading} />
+    </div>
+  );
+}
+
+function ScriptWriter() {
+  const [topic, setTopic] = useState("");
+  const [audience, setAudience] = useState("All Audiences");
+  const [tone, setTone] = useState("warm and trustworthy");
+  const [partner, setPartner] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!topic) { setError("Please enter a topic."); return; }
+    setError(""); setLoading(true); setOutput("");
+    try {
+      const sys = `You are an expert financial video scriptwriter. You write short-form scripts (60–90 seconds) for wealth management advisors that feel personal, trustworthy, and clear.`;
+      const usr = `Write a complete 60–90 second video script for ${ADVISOR} at ${FIRM}.\n\nTOPIC: ${topic}\nAUDIENCE: ${audience}\nTONE: ${tone}\n${partner ? "PARTNER NOTE: " + partner : ""}\n\nUse this exact structure:\n\nHOOK (0–5 sec)\nOne punchy sentence that stops the scroll.\n\nPROBLEM (5–20 sec)\nName the specific pain point this audience has. Be empathetic.\n\nSOLUTION (20–50 sec)\nHow ${FIRM} addresses this. Use "we" language. Keep it warm and concrete.\n\nCALL TO ACTION (50–60 sec)\nOne clear, natural ask — not pushy.\n\n---\nNOTE TO ${ADVISOR.toUpperCase()}: One sentence delivery tip or personalization suggestion.`;
+      setOutput(await callClaude(sys, usr));
+    } catch (e) { setError("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <Field label="Topic">
+        <Input value={topic} onChange={setTopic} placeholder="e.g. How to Build a Retirement Paycheck" />
+        <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 8 }}>Quick-fill</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 4 }}>
+          {TOPICS.slice(0, 6).map(t => <Chip key={t} label={t.split("—")[0].trim()} onClick={() => setTopic(t)} />)}
+        </div>
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Audience">
+          <Select value={audience} onChange={setAudience} options={[
+            { value: "All Audiences", label: "All Audiences" },
+            { value: "High-Net-Worth Individuals", label: "High-Net-Worth Individuals" },
+            { value: "Business Owners", label: "Business Owners" },
+            { value: "Pre-Retirees (ages 55–65)", label: "Pre-Retirees (55–65)" },
+            { value: "Retirees", label: "Retirees" },
+          ]} />
+        </Field>
+        <Field label="Tone">
+          <Select value={tone} onChange={setTone} options={[
+            { value: "warm and trustworthy", label: "Warm & Trustworthy" },
+            { value: "confident and direct", label: "Confident & Direct" },
+            { value: "educational and calm", label: "Educational & Calm" },
+            { value: "urgent and motivating", label: "Urgent & Motivating" },
+          ]} />
+        </Field>
+      </div>
+      <Field label="Partner involved? (optional)">
+        <Input value={partner} onChange={setPartner} placeholder="e.g. Estate Planning Attorney — mention them in outro" />
+      </Field>
+      <RunBtn onClick={run} loading={loading} label="Write Script" />
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#b91c1c" }}>{error}</div>}
+      <OutputBox text={output} loading={loading} />
+    </div>
+  );
+}
+
+function SocialPostGenerator() {
+  const [script, setScript] = useState("");
+  const [topic, setTopic] = useState("");
+  const [cta, setCta] = useState("schedule a call");
+  const [outputs, setOutputs] = useState(["", "", ""]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!script) { setError("Please paste the script or key points."); return; }
+    setError(""); setLoading(true); setOutputs(["", "", ""]);
+    try {
+      const sys = `You are a social media strategist for a wealth management firm. You write posts that are professional yet human — educational without being dry.`;
+      const usr = `Based on this content from ${FIRM}, generate THREE social posts. Use ===LINKEDIN===, ===FACEBOOK===, ===EMAIL_TEASER=== as separators.\n\nTOPIC: ${topic || "See content"}\nCTA: ${cta}\nCONTENT:\n${script}\n\n- LINKEDIN: 150–200 words, thought-leadership, hook first, end with question + 3–4 hashtags\n- FACEBOOK: 100–150 words, warm/conversational, human impact, end with CTA\n- EMAIL TEASER: Subject line + 3–4 sentence preview, 80 words max body\n\nFirm: ${FIRM} | ${PHONE} | ${WEBSITE}`;
+      const full = await callClaude(sys, usr);
+      const li = full.split("===LINKEDIN===")[1]?.split("===FACEBOOK===")[0]?.trim() || full;
+      const fb = full.split("===FACEBOOK===")[1]?.split("===EMAIL_TEASER===")[0]?.trim() || "";
+      const em = full.split("===EMAIL_TEASER===")[1]?.trim() || "";
+      setOutputs([li, fb, em]);
+    } catch (e) { setError("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <Field label="Script or Key Points">
+        <Textarea value={script} onChange={setScript} rows={6} placeholder="Paste the video script or main talking points here..." />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Topic Title">
+          <Input value={topic} onChange={setTopic} placeholder="e.g. The 4% Rule" />
+        </Field>
+        <Field label="Call to Action">
+          <Select value={cta} onChange={setCta} options={[
+            { value: "schedule a call", label: "Schedule a Call" },
+            { value: "send us a message", label: "Send Us a Message" },
+            { value: "visit our website", label: "Visit Our Website" },
+            { value: "link in bio", label: "Link in Bio" },
+            { value: "reply to this email", label: "Reply to This Email" },
+          ]} />
+        </Field>
+      </div>
+      <RunBtn onClick={run} loading={loading} label="Generate 3 Posts" />
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#b91c1c" }}>{error}</div>}
+      <SocialOutputBox outputs={outputs} loading={loading} />
+    </div>
+  );
+}
+
+function PartnerPromptSender() {
+  const [type, setType] = useState("CPA / Tax Partner");
+  const [name, setName] = useState("");
+  const [topic, setTopic] = useState("");
+  const [format, setFormat] = useState("2–3 sentence expert quote");
+  const [deadline, setDeadline] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!topic) { setError("Please enter the assigned topic."); return; }
+    setError(""); setLoading(true); setOutput("");
+    try {
+      const sys = `You are ${COORDINATOR}, Practice Development Coordinator at ${FIRM}. You write professional, warm, efficient emails to referral partners. Your emails are brief, specific, and easy to say yes to.`;
+      const usr = `Draft a concise partner outreach email from ${COORDINATOR} at ${FIRM}.\n\nPARTNER TYPE: ${type}\nPARTNER NAME: ${name || "[Partner Name]"}\nTOPIC: ${topic}\nCONTENT FORMAT NEEDED: ${format}\nSUBMISSION DEADLINE: ${deadline || "[Date]"}\n\nEmail should:\n1. Open warmly (2 sentences max)\n2. Clearly state what's needed and why\n3. Include 1–2 specific guiding questions to help them know what to write/say\n4. State the deadline clearly\n5. Make it easy — reassure them it's low-lift\n6. Close professionally\n\nSign off as: ${COORDINATOR} | ${FIRM} | ${PHONE}\n\nKeep under 200 words. Include subject line.`;
+      setOutput(await callClaude(sys, usr));
+    } catch (e) { setError("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Partner Type">
+          <Select value={type} onChange={setType} options={[
+            { value: "CPA / Tax Partner", label: "CPA / Tax Partner" },
+            { value: "Estate Planning Attorney", label: "Estate Planning Attorney" },
+            { value: "Insurance Partner", label: "Insurance Partner" },
+          ]} />
+        </Field>
+        <Field label="Partner Name">
+          <Input value={name} onChange={setName} placeholder="e.g. David Chen" />
+        </Field>
+      </div>
+      <Field label="Assigned Topic (this week)">
+        <Input value={topic} onChange={setTopic} placeholder="e.g. Roth Conversions — Who They're For and When" />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Content Format Needed">
+          <Select value={format} onChange={setFormat} options={[
+            { value: "2–3 sentence expert quote", label: "2–3 Sentence Expert Quote" },
+            { value: "60-second video contribution", label: "60-sec Video Contribution" },
+            { value: "short bullet-point tips (2–3 tips)", label: "Bullet Tips (2–3)" },
+          ]} />
+        </Field>
+        <Field label="Submission Deadline">
+          <Input value={deadline} onChange={setDeadline} placeholder="e.g. Friday, April 4" />
+        </Field>
+      </div>
+      <RunBtn onClick={run} loading={loading} label="Draft Partner Email" />
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#b91c1c" }}>{error}</div>}
+      <OutputBox text={output} loading={loading} />
+    </div>
+  );
+}
+
+function QuoteCardWriter() {
+  const [quote, setQuote] = useState("");
+  const [name, setName] = useState("");
+  const [topic, setTopic] = useState("");
+  const [format, setFormat] = useState("social media graphic caption (Instagram/LinkedIn)");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!quote) { setError("Please paste the partner's quote."); return; }
+    setError(""); setLoading(true); setOutput("");
+    try {
+      const sys = `You are a brand content specialist for ${FIRM}. You refine expert partner quotes into polished, publishable content while maintaining the partner's authentic voice.`;
+      const usr = `A partner of ${FIRM} submitted this quote. Polish and format it as a ${format}.\n\nPARTNER: ${name || "[Partner Name]"}\nTOPIC: ${topic || "Financial Planning"}\nRAW QUOTE:\n"${quote}"\n\nInstructions:\n- Light editing only — keep their authentic voice, clean up awkwardness\n- If social graphic caption: quote + attribution + 1-line context + suggested visual direction\n- If Canva prompt: full Canva AI prompt with layout, fonts, colors, text placement\n- If email pull-quote: format for email with suggested intro sentence and attribution\n\nAlso include one suggested hashtag or subject line tie-in.`;
+      setOutput(await callClaude(sys, usr));
+    } catch (e) { setError("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <Field label="Partner's Raw Quote">
+        <Textarea value={quote} onChange={setQuote} rows={4} placeholder="Paste the quote exactly as the partner submitted it..." />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Partner Name & Title">
+          <Input value={name} onChange={setName} placeholder="e.g. Sarah Lee, CPA — Lee & Associates" />
+        </Field>
+        <Field label="Topic / Theme">
+          <Input value={topic} onChange={setTopic} placeholder="e.g. Roth Conversions" />
+        </Field>
+      </div>
+      <Field label="Output Format">
+        <Select value={format} onChange={setFormat} options={[
+          { value: "social media graphic caption (Instagram/LinkedIn)", label: "Social Graphic Caption" },
+          { value: "Canva design prompt with layout instructions", label: "Canva Design Prompt" },
+          { value: "email newsletter pull-quote", label: "Email Newsletter Pull-Quote" },
+        ]} />
+      </Field>
+      <RunBtn onClick={run} loading={loading} label="Polish Quote" />
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#b91c1c" }}>{error}</div>}
+      <OutputBox text={output} loading={loading} />
+    </div>
+  );
+}
+
+function NewsletterBuilder() {
+  const [topic, setTopic] = useState("");
+  const [main, setMain] = useState("");
+  const [partnerContent, setPartnerContent] = useState("");
+  const [partnerName, setPartnerName] = useState("");
+  const [cta, setCta] = useState("Schedule a complimentary 30-minute call");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async () => {
+    if (!topic || !main) { setError("Please enter the topic and Jeff's main content."); return; }
+    setError(""); setLoading(true); setOutput("");
+    try {
+      const sys = `You are a financial newsletter writer for ${FIRM}. You write weekly email newsletters that are warm, educational, and concise — never corporate. Clients should feel like they got a note from a trusted advisor.`;
+      const usr = `Build a complete weekly email newsletter for ${FIRM}.\n\nWEEK/TOPIC: ${topic}\nJEFF'S CONTENT: ${main}\n${partnerContent ? "PARTNER SIDEBAR: " + partnerContent : "NO PARTNER THIS WEEK"}\n${partnerName ? "PARTNER NAME/FIRM: " + partnerName : ""}\nPRIMARY CTA: ${cta}\n\nFormat:\n\nSUBJECT LINE: (2 options — curiosity-driven and benefit-driven)\n\nPREHEADER: (1 sentence, 80 chars max)\n\n---\n\nOPENING (2–3 sentences, personal and warm)\n\nMAIN SECTION\n(4–6 short paragraphs, 1–2 bolded callouts for scanners)\n\n${partnerContent ? "PARTNER SPOTLIGHT\n(2–3 sentence intro + partner content as pull-quote)" : ""}\n\nCLOSING & CTA\n(2 sentences from ${ADVISOR} + CTA button text)\n\nFOOTER:\n${FIRM} | ${PHONE} | ${WEBSITE} | Norfolk, VA\n\nKeep reading time under 3 minutes. Write in ${ADVISOR}'s voice: confident, caring, plain-spoken.`;
+      setOutput(await callClaude(sys, usr));
+    } catch (e) { setError("Error: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <Field label="Week # & Main Topic">
+        <Input value={topic} onChange={setTopic} placeholder="e.g. Week 4 — Roth Conversions: Who They're For and When" />
+      </Field>
+      <Field label="Jeff's Main Content (talking points, script, or notes)">
+        <Textarea value={main} onChange={setMain} rows={5} placeholder="Paste Jeff's talking points, video script summary, or key points..." />
+      </Field>
+      <Field label="Partner Sidebar Content (optional — leave blank if no partner this week)">
+        <Textarea value={partnerContent} onChange={setPartnerContent} rows={3} placeholder="Paste partner quote or tips here..." />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Partner Name & Firm (if applicable)">
+          <Input value={partnerName} onChange={setPartnerName} placeholder="e.g. David Chen, CPA" />
+        </Field>
+        <Field label="Primary Call to Action">
+          <Select value={cta} onChange={setCta} options={[
+            { value: "Schedule a complimentary 30-minute call", label: "Schedule a 30-Min Call" },
+            { value: "Reply to this email with your question", label: "Reply with Your Question" },
+            { value: "Visit our website to learn more", label: "Visit Our Website" },
+            { value: "Attend our upcoming seminar", label: "Attend Our Seminar" },
+          ]} />
+        </Field>
+      </div>
+      <RunBtn onClick={run} loading={loading} label="Build Newsletter Draft" />
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#b91c1c" }}>{error}</div>}
+      <OutputBox text={output} loading={loading} />
+    </div>
+  );
+}
+
+const PANEL_COMPONENTS = {
+  "topic-drafter": TopicDrafter,
+  "script-writer": ScriptWriter,
+  "social-posts": SocialPostGenerator,
+  "partner-prompt": PartnerPromptSender,
+  "quote-card": QuoteCardWriter,
+  "newsletter": NewsletterBuilder,
+};
+
+const PANEL_META = {
+  "topic-drafter":  { tag: "Phase 1 · Agent 1", title: "Topic Drafter",          desc: "Weekly meeting prep. Enter a topic and get Jeff's full 1-page briefing with talking points, stats, and angle suggestions — ready before the camera turns on." },
+  "script-writer":  { tag: "Phase 1 · Agent 2", title: "Script Writer",          desc: "Generates a complete 60–90 second video script with hook, problem, solution, and call to action. Jeff reviews and makes it his own." },
+  "social-posts":   { tag: "Phase 1 · Agent 3", title: "Social Post Generator",  desc: "Paste your video script or key talking points and get three ready-to-post variations — LinkedIn, Facebook, and email teaser — all at once." },
+  "partner-prompt": { tag: "Phase 2 · Agent 4", title: "Partner Prompt Sender",  desc: "Generates a tailored question for the week's partner and drafts the outreach email for Kelly to review and send. No more writing these from scratch." },
+  "quote-card":     { tag: "Phase 2 · Agent 5", title: "Quote Card Writer",      desc: "Paste a partner's raw quote and get a polished caption ready for your graphic designer or a Canva prompt — no editing needed." },
+  "newsletter":     { tag: "Phase 2 · Agent 6", title: "Newsletter Builder",     desc: "Assembles the full weekly email — Jeff's content, partner sidebar, and CTA — ready for Kelly to review in under 10 minutes." },
+};
+
+export default function App() {
+  const [active, setActive] = useState("topic-drafter");
+  const PanelComp = PANEL_COMPONENTS[active];
+  const meta = PANEL_META[active];
+  const phases = [...new Set(AGENTS.map(a => a.phase))];
+
+  return (
+    <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", minHeight: "100vh", background: "#f7f3ec", display: "flex", flexDirection: "column" }}>
+
+      {/* HEADER */}
+      <div style={{ background: "#0f1f38", borderBottom: "2px solid #c9a84c", height: 64, display: "flex", alignItems: "center", padding: "0 32px", gap: 14, flexShrink: 0 }}>
+        <div style={{ width: 38, height: 38, background: "#c9a84c", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, color: "#0f1f38", fontSize: 15, letterSpacing: -1 }}>CKM</div>
+        <div>
+          <div style={{ color: "#fff", fontSize: 16, fontWeight: 600, letterSpacing: "0.02em" }}>Courage Korving Miller</div>
+          <div style={{ color: "#c9a84c", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.15em" }}>Content Agent · AI-Powered</div>
+        </div>
+      </div>
+
+      {/* BODY */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+
+        {/* SIDEBAR */}
+        <div style={{ width: 240, background: "#1a3357", borderRight: "1px solid rgba(201,168,76,0.15)", padding: "24px 0", flexShrink: 0, overflowY: "auto" }}>
+          {phases.map(phase => (
+            <div key={phase} style={{ marginBottom: 8 }}>
+              <div style={{ padding: "6px 20px", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.15em", color: "#c9a84c", fontWeight: 600 }}>{phase}</div>
+              {AGENTS.filter(a => a.phase === phase).map(agent => (
+                <button key={agent.id} onClick={() => setActive(agent.id)}
+                  style={{ width: "100%", background: active === agent.id ? "rgba(201,168,76,0.12)" : "none",
+                    border: "none", borderRight: active === agent.id ? "3px solid #c9a84c" : "3px solid transparent",
+                    padding: "10px 20px", textAlign: "left", cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 10,
+                    color: active === agent.id ? "#fff" : "rgba(255,255,255,0.6)",
+                    fontFamily: "inherit", fontSize: 13.5, transition: "all .15s" }}>
+                  <span style={{ fontSize: 15 }}>{agent.icon}</span>
+                  {agent.label}
+                </button>
+              ))}
+              {phase !== phases[phases.length - 1] && <div style={{ height: 1, background: "rgba(255,255,255,0.07)", margin: "12px 20px" }} />}
+            </div>
+          ))}
+        </div>
+
+        {/* MAIN */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "36px 44px" }}>
+          <div style={{ maxWidth: 820 }}>
+            <div style={{ display: "inline-block", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.15em", color: "#c9a84c", background: "rgba(201,168,76,0.1)", border: "1px solid rgba(201,168,76,0.25)", borderRadius: 4, padding: "3px 10px", marginBottom: 10, fontWeight: 600 }}>{meta.tag}</div>
+            <h1 style={{ fontFamily: "Georgia, serif", fontSize: 30, color: "#0f1f38", marginBottom: 8, lineHeight: 1.2 }}>{meta.title}</h1>
+            <p style={{ fontSize: 14, color: "#6b7280", lineHeight: 1.65, maxWidth: 580, marginBottom: 28 }}>{meta.desc}</p>
+            <PanelComp key={active} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
